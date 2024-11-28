@@ -1,8 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import Echo from 'laravel-echo';
 
-const WebSocketTTS = () => {
-  const [socket, setSocket] = useState(null);
-  const [isConnected, setIsConnected] = useState(false);
+const TextToSpeechReverb = () => {
   const [messages, setMessages] = useState([]);
   const [voices, setVoices] = useState([]);
   const [selectedVoice, setSelectedVoice] = useState(null);
@@ -10,41 +9,42 @@ const WebSocketTTS = () => {
   const [rate, setRate] = useState(1);
   const [pitch, setPitch] = useState(1);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
   
-  // Queue untuk menyimpan pesan yang akan diputar
   const messageQueue = useRef([]);
-  // Flag untuk menandai status pemutaran
   const isProcessing = useRef(false);
+  const echoInstance = useRef(null);
 
-  // Initialize WebSocket connection
+  // Initialize Echo dan Voice
   useEffect(() => {
-    const ws = new WebSocket('ws://your-websocket-server');
+    // Setup Laravel Echo
+    echoInstance.current = new Echo({
+      broadcaster: 'reverb',
+      key: import.meta.env.VITE_REVERB_APP_KEY,
+      wsHost: import.meta.env.VITE_REVERB_HOST || window.location.hostname,
+      wsPort: import.meta.env.VITE_REVERB_PORT || 8080,
+      forceTLS: false,
+      enabledTransports: ['ws', 'wss']
+    });
 
-    ws.onopen = () => {
-      console.log('Connected to WebSocket');
+    // Listen connection status
+    echoInstance.current.connector.socket.on('connect', () => {
+      console.log('Connected to Reverb');
       setIsConnected(true);
-    };
+    });
 
-    ws.onclose = () => {
-      console.log('Disconnected from WebSocket');
+    echoInstance.current.connector.socket.on('disconnect', () => {
+      console.log('Disconnected from Reverb');
       setIsConnected(false);
-      setTimeout(() => {
-        setSocket(new WebSocket('ws://your-websocket-server'));
-      }, 5000);
-    };
+    });
 
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
-    };
-
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      setMessages(prev => [...prev, data]);
-      // Tambahkan pesan ke antrian
-      addToQueue(data.message);
-    };
-
-    setSocket(ws);
+    // Listen to panggil_antrian event
+    echoInstance.current.channel('antrian')
+      .listen('.panggil_antrian', (data) => {
+        console.log('Received message:', data);
+        setMessages(prev => [...prev, data]);
+        addToQueue(data.message);
+      });
 
     // Initialize speech synthesis voices
     const initVoices = () => {
@@ -60,8 +60,8 @@ const WebSocketTTS = () => {
     initVoices();
 
     return () => {
-      if (ws) {
-        ws.close();
+      if (echoInstance.current) {
+        echoInstance.current.disconnect();
       }
       window.speechSynthesis.cancel();
     };
@@ -75,7 +75,6 @@ const WebSocketTTS = () => {
 
   // Fungsi untuk memproses antrian pesan
   const processQueue = useCallback(async () => {
-    // Jika sedang memproses atau antrian kosong, keluar
     if (isProcessing.current || messageQueue.current.length === 0) {
       return;
     }
@@ -86,7 +85,7 @@ const WebSocketTTS = () => {
     while (messageQueue.current.length > 0) {
       const text = messageQueue.current[0];
       await playMessage(text);
-      messageQueue.current.shift(); // Hapus pesan yang sudah diputar
+      messageQueue.current.shift();
     }
 
     isProcessing.current = false;
@@ -112,6 +111,7 @@ const WebSocketTTS = () => {
       };
 
       utterance.onerror = () => {
+        console.error('Error playing message');
         resolve();
       };
 
@@ -133,7 +133,7 @@ const WebSocketTTS = () => {
         <div className="flex items-center space-x-2">
           <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
           <span className="text-sm text-gray-600">
-            {isConnected ? 'Terhubung ke WebSocket' : 'Terputus dari WebSocket'}
+            {isConnected ? 'Terhubung ke Reverb' : 'Terputus dari Reverb'}
           </span>
         </div>
         <div className="flex items-center space-x-2">
@@ -203,7 +203,7 @@ const WebSocketTTS = () => {
 
       <div className="border rounded-md p-4 max-h-60 overflow-y-auto space-y-2">
         <div className="flex justify-between items-center mb-2">
-          <h3 className="font-medium text-gray-700">Riwayat Pesan</h3>
+          <h3 className="font-medium text-gray-700">Riwayat Panggilan</h3>
           <span className="text-sm text-gray-500">
             Antrian: {messageQueue.current.length} pesan
           </span>
@@ -217,14 +217,8 @@ const WebSocketTTS = () => {
 
       <div className="flex space-x-2">
         <button
-          onClick={() => addToQueue("Ini adalah pesan test")}
-          className="flex-1 px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600"
-        >
-          Test Suara
-        </button>
-        <button
           onClick={clearQueue}
-          className="px-4 py-2 bg-red-500 text-white rounded-md hover:bg-red-600"
+          className="w-full px-4 py-2 bg-red-500 text-white rounded-md hover:bg-red-600 disabled:opacity-50"
           disabled={!isPlaying && messageQueue.current.length === 0}
         >
           Bersihkan Antrian
@@ -234,4 +228,4 @@ const WebSocketTTS = () => {
   );
 };
 
-export default WebSocketTTS;
+export default TextToSpeechReverb;
